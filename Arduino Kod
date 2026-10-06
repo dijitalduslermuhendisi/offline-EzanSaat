@@ -1,0 +1,180 @@
+#include <ThreeWire.h>
+#include <RtcDS1302.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <math.h>
+
+ThreeWire myWire(7, 6, 8); // DAT -> Pin 7, CLK -> Pin 6, RST -> Pin 8
+RtcDS1302<ThreeWire> rtc(myWire);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+const int BUZZER_PIN = 5; 
+
+const float ENLEM  = 37.0017;
+const float BOYLAM = 35.3289;
+const float SAAT_DILIMI = 3.0;
+
+
+const int OFSET_IMSAK  = -2;
+const int OFSET_GUNES  = -3;
+const int OFSET_OGLE   = +6;
+const int OFSET_IKINDI = +5;
+const int OFSET_AKSAM  = +7;
+const int OFSET_YATSI  = +2;
+
+int sonCalinanDakika = -1; 
+
+float safe_acos(float x) {
+  if (x > 1.0)  x = 1.0;
+  if (x < -1.0) x = -1.0;
+  return acos(x);
+}
+
+void setup() {
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  Wire.begin();
+  lcd.init();
+  lcd.backlight();
+  rtc.Begin();
+
+  RtcDateTime derlemeZamani = RtcDateTime(__DATE__, __TIME__);
+  if (!rtc.IsDateTimeValid()) {
+    rtc.SetDateTime(derlemeZamani);
+  }
+  if (rtc.GetIsWriteProtected()) {
+    rtc.SetIsWriteProtected(false);
+  }
+  if (!rtc.GetIsRunning()) {
+    rtc.SetIsRunning(true);
+  }
+}
+
+void loop() {
+  RtcDateTime simdi = rtc.GetDateTime();
+
+  if (!simdi.IsValid()) {
+    lcd.clear();
+    lcd.print("RTC Hatasi!");
+    delay(2000);
+    return;
+  }
+
+  int gun_sayisi = YilinGunu(simdi.Year(), simdi.Month(), simdi.Day());
+
+  float imsak, gunes, ogle, ikindi, aksam, yatsi;
+  VakitHesapla(gun_sayisi, imsak, gunes, ogle, ikindi, aksam, yatsi);
+
+  if (VakitMi(imsak, simdi) || VakitMi(ogle, simdi) || 
+      VakitMi(ikindi, simdi) || VakitMi(aksam, simdi) || VakitMi(yatsi, simdi)) {
+    
+    if (sonCalinanDakika != simdi.Minute()) {
+      sonCalinanDakika = simdi.Minute();
+      
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(">> EZAN VAKTI <<");
+      lcd.setCursor(0, 1);
+      lcd.print("  HAYDII NAMAZA  ");
+      
+      digitalWrite(BUZZER_PIN, HIGH);
+      delay(5000); 
+      digitalWrite(BUZZER_PIN, LOW);
+    }
+  }
+
+ 
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("ADANA VAKITLERI");
+  lcd.setCursor(0, 1);
+  char buf[17];
+  sprintf(buf, "%02d/%02d  %02d:%02d:%02d", simdi.Day(), simdi.Month(), simdi.Hour(), simdi.Minute(), simdi.Second());
+  lcd.print(buf);
+  delay(3000);
+
+ 
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Imsak : ");
+  lcd.print(SaatMetni(imsak));
+  lcd.setCursor(0, 1);
+  lcd.print("Gunes : ");
+  lcd.print(SaatMetni(gunes));
+  delay(3000);
+
+  
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Ogle  : ");
+  lcd.print(SaatMetni(ogle));
+  lcd.setCursor(0, 1);
+  lcd.print("Ikindi: ");
+  lcd.print(SaatMetni(ikindi));
+  delay(3000);
+
+  
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Aksam : ");
+  lcd.print(SaatMetni(aksam));
+  lcd.setCursor(0, 1);
+  lcd.print("Yatsi : ");
+  lcd.print(SaatMetni(yatsi));
+  delay(3000);
+}
+
+bool VakitMi(float vakit, RtcDateTime suan) {
+  if (vakit < 0) vakit += 24.0;
+  if (vakit >= 24.0) vakit -= 24.0;
+  int s = (int)vakit;
+  int d = (int)((vakit - s) * 60.0 + 0.5);
+  if (d >= 60) { d = 0; s = (s + 1) % 24; }
+
+  return (suan.Hour() == s && suan.Minute() == d);
+}
+
+void VakitHesapla(int gun, float &im, float &gu, float &og, float &ik, float &ak, float &ya) {
+  float d = 23.45 * sin((360.0 / 365.0 * (gun - 81)) * DEG_TO_RAD);
+  float eot = 9.87 * sin(2 * (360.0 / 365.0 * (gun - 81)) * DEG_TO_RAD) - 7.53 * cos((360.0 / 365.0 * (gun - 81)) * DEG_TO_RAD);
+
+  float solarNoon = 720.0 - 4.0 * BOYLAM - eot + SAAT_DILIMI * 60.0;
+
+  float h_imsak = safe_acos((sin(-18.0 * DEG_TO_RAD) - sin(ENLEM * DEG_TO_RAD) * sin(d * DEG_TO_RAD)) / (cos(ENLEM * DEG_TO_RAD) * cos(d * DEG_TO_RAD))) * RAD_TO_DEG;
+  float h_gunes = safe_acos((sin(-0.833 * DEG_TO_RAD) - sin(ENLEM * DEG_TO_RAD) * sin(d * DEG_TO_RAD)) / (cos(ENLEM * DEG_TO_RAD) * cos(d * DEG_TO_RAD))) * RAD_TO_DEG;
+  
+  float aci_ikindi = atan(1.0 / (1.0 + tan(fabs(ENLEM - d) * DEG_TO_RAD))) * RAD_TO_DEG;
+  float h_ikindi = safe_acos((sin(aci_ikindi * DEG_TO_RAD) - sin(ENLEM * DEG_TO_RAD) * sin(d * DEG_TO_RAD)) / (cos(ENLEM * DEG_TO_RAD) * cos(d * DEG_TO_RAD))) * RAD_TO_DEG;
+  
+  float h_yatsi = safe_acos((sin(-17.0 * DEG_TO_RAD) - sin(ENLEM * DEG_TO_RAD) * sin(d * DEG_TO_RAD)) / (cos(ENLEM * DEG_TO_RAD) * cos(d * DEG_TO_RAD))) * RAD_TO_DEG;
+
+  im = (solarNoon - h_imsak * 4.0 + OFSET_IMSAK) / 60.0;
+  gu = (solarNoon - h_gunes * 4.0 + OFSET_GUNES) / 60.0;
+  og = (solarNoon + OFSET_OGLE) / 60.0;
+  ik = (solarNoon + h_ikindi * 4.0 + OFSET_IKINDI) / 60.0;
+  ak = (solarNoon + h_gunes * 4.0 + OFSET_AKSAM) / 60.0;
+  ya = (solarNoon + h_yatsi * 4.0 + OFSET_YATSI) / 60.0;
+}
+
+int YilinGunu(int y, int m, int d) {
+  int aylar[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  if ((y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)) aylar[2] = 29;
+  int toplam = 0;
+  for (int i = 1; i < m; i++) toplam += aylar[i];
+  return toplam + d;
+}
+
+String SaatMetni(float saat_ondalik) {
+  if (saat_ondalik < 0) saat_ondalik += 24.0;
+  if (saat_ondalik >= 24.0) saat_ondalik -= 24.0;
+  int s = (int)saat_ondalik;
+  int d = (int)((saat_ondalik - s) * 60.0 + 0.5);
+  if (d >= 60) {
+    d = 0;
+    s += 1;
+  }
+  char t[6];
+  sprintf(t, "%02d:%02d", s, d);
+  return String(t);
+}
